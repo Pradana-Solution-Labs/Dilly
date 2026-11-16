@@ -155,6 +155,108 @@ class DockerManager {
     await container.start();
     return container;
   }
+
+  /**
+   * Retrieves all containers belonging to a Compose project or service name
+   */
+  async getProjectContainers(projectName: string): Promise<Array<{ id: string; name: string; service: string; state: string }>> {
+    try {
+      const normalized = projectName.toLowerCase().replace(/[^a-z0-9_-]/g, "");
+      const containers = await this.docker.listContainers({
+        all: true,
+        filters: {
+          label: [`com.docker.compose.project=${normalized}`],
+        },
+      });
+
+      return containers.map((c) => ({
+        id: c.Id,
+        name: c.Names[0]?.replace(/^\//, "") || c.Id.substring(0, 12),
+        service: c.Labels["com.docker.compose.service"] || "app",
+        state: c.State,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Streams live logs from a container, automatically demuxing stdout/stderr
+   */
+  async streamContainerLogs(
+    containerId: string,
+    tail: number | "all" = 100,
+    onData: (chunk: string) => void
+  ): Promise<() => void> {
+    const container = this.getContainer(containerId);
+    const info = await container.inspect();
+    const hasTty = Boolean(info.Config?.Tty);
+
+    const logStream = (await container.logs({
+      follow: true,
+      stdout: true,
+      stderr: true,
+      tail: tail === "all" ? undefined : tail,
+      timestamps: true,
+    })) as unknown as NodeJS.ReadableStream;
+
+    if (hasTty) {
+      logStream.on("data", (chunk: Buffer) => {
+        onData(chunk.toString("utf-8"));
+      });
+    } else {
+      const { PassThrough } = await import("stream");
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+
+      stdout.on("data", (chunk: Buffer) => onData(chunk.toString("utf-8")));
+      stderr.on("data", (chunk: Buffer) => onData(chunk.toString("utf-8")));
+
+      this.docker.modem.demuxStream(logStream, stdout, stderr);
+    }
+
+    return () => {
+      try {
+        if ("destroy" in logStream && typeof (logStream as any).destroy === "function") {
+          (logStream as any).destroy();
+        }
+      } catch {}
+    };
+  }
+
+  /**
+   * Spawns an interactive TTY exec session in the container
+   */
+  async createTerminalSession(containerId: string): Promise<{
+    stream: NodeJS.ReadWriteStream;
+    exec: Docker.Exec;
+    resize: (cols: number, rows: number) => Promise<void>;
+  }> {
+    const container = this.getContainer(containerId);
+    const exec = await container.exec({
+      Cmd: ["/bin/sh", "-c", "[ -x /bin/bash ] && exec /bin/bash || exec /bin/sh"],
+      AttachStdin: true,
+      AttachStdout: true,
+      AttachStderr: true,
+      Tty: true,
+    });
+
+    const stream = (await exec.start({
+      hijack: true,
+      stdin: true,
+      Tty: true,
+    })) as unknown as NodeJS.ReadWriteStream;
+
+    return {
+      stream,
+      exec,
+      resize: async (cols: number, rows: number) => {
+        try {
+          await exec.resize({ w: cols, h: rows });
+        } catch {}
+      },
+    };
+  }
 }
 
 export const dockerService = new DockerManager();

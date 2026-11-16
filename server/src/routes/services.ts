@@ -4,6 +4,7 @@ import { db, schema } from "../db/index.js";
 import { eq, and } from "drizzle-orm";
 import { dockerService } from "../services/docker.js";
 import { caddyService } from "../services/caddy.js";
+import { extractComposeEnvVars } from "../services/env-parser.js";
 
 export const serviceRoutes = new Elysia({ prefix: "/api/services" })
   .use(authMiddleware)
@@ -31,10 +32,25 @@ export const serviceRoutes = new Elysia({ prefix: "/api/services" })
           gitBranch: body.gitBranch || "main",
           dockerfilePath: body.dockerfilePath || "Dockerfile",
           composePath: body.composePath || "docker-compose.yml",
+          composeContent: body.composeContent,
+          dockerfileContent: body.dockerfileContent,
           domain: body.domain,
           internalPort: body.internalPort || 80,
         })
         .returning();
+
+      // If composeContent is supplied at creation, auto-extract environment variables!
+      if (body.composeContent) {
+        const extracted = extractComposeEnvVars(body.composeContent);
+        for (const item of extracted) {
+          await db.insert(schema.envVars).values({
+            serviceId: created.id,
+            key: item.key,
+            value: item.defaultValue,
+            isSecret: item.isSecret,
+          });
+        }
+      }
 
       return created;
     },
@@ -47,6 +63,8 @@ export const serviceRoutes = new Elysia({ prefix: "/api/services" })
         gitBranch: t.Optional(t.String()),
         dockerfilePath: t.Optional(t.String()),
         composePath: t.Optional(t.String()),
+        composeContent: t.Optional(t.String()),
+        dockerfileContent: t.Optional(t.String()),
         domain: t.Optional(t.String()),
         internalPort: t.Optional(t.Number()),
       }),
@@ -134,6 +152,8 @@ export const serviceRoutes = new Elysia({ prefix: "/api/services" })
         gitBranch: t.Optional(t.String()),
         dockerfilePath: t.Optional(t.String()),
         composePath: t.Optional(t.String()),
+        composeContent: t.Optional(t.String()),
+        dockerfileContent: t.Optional(t.String()),
         domain: t.Optional(t.String()),
         internalPort: t.Optional(t.Number()),
       }),
@@ -259,5 +279,123 @@ export const serviceRoutes = new Elysia({ prefix: "/api/services" })
     },
     {
       requireRole: "viewer",
+    }
+  )
+  .get(
+    "/:id/containers",
+    async ({ params, user, set }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: "Unauthorized" };
+      }
+
+      const [service] = await db.select().from(schema.services).where(eq(schema.services.id, params.id));
+      if (!service) {
+        set.status = 404;
+        return { error: "Service not found" };
+      }
+
+      const [project] = await db.select().from(schema.projects).where(eq(schema.projects.id, service.projectId));
+
+      if (service.type === "compose") {
+        const projectName = `${project.name}_${service.name}`.toLowerCase().replace(/[^a-z0-9_-]/g, "");
+        const containers = await dockerService.getProjectContainers(projectName);
+        return { containers };
+      } else {
+        // Dockerfile service
+        if (!service.currentContainerId) {
+          return { containers: [] };
+        }
+        try {
+          const container = dockerService.getContainer(service.currentContainerId);
+          const info = await container.inspect();
+          return {
+            containers: [
+              {
+                id: info.Id,
+                name: info.Name.replace(/^\//, ""),
+                service: service.name,
+                state: info.State.Status,
+              },
+            ],
+          };
+        } catch {
+          return { containers: [] };
+        }
+      }
+    },
+    {
+      requireRole: "viewer",
+    }
+  )
+  .post(
+    "/:id/env/auto-detect",
+    async ({ params, body, user, set }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: "Unauthorized" };
+      }
+
+      const [service] = await db.select().from(schema.services).where(eq(schema.services.id, params.id));
+      if (!service) {
+        set.status = 404;
+        return { error: "Service not found" };
+      }
+
+      const rawCompose = (body as any)?.composeContent || service.composeContent;
+      if (!rawCompose || !rawCompose.trim()) {
+        return {
+          detected: 0,
+          added: 0,
+          skipped: 0,
+          message: "No Compose content provided to analyze",
+          variables: [],
+        };
+      }
+
+      const extracted = extractComposeEnvVars(rawCompose);
+      const existing = await db
+        .select()
+        .from(schema.envVars)
+        .where(eq(schema.envVars.serviceId, service.id));
+
+      const existingKeys = new Set(existing.map((e) => e.key));
+      let addedCount = 0;
+      let skippedCount = 0;
+
+      for (const item of extracted) {
+        if (!existingKeys.has(item.key)) {
+          await db.insert(schema.envVars).values({
+            serviceId: service.id,
+            key: item.key,
+            value: item.defaultValue,
+            isSecret: item.isSecret,
+          });
+          addedCount++;
+          existingKeys.add(item.key);
+        } else {
+          skippedCount++;
+        }
+      }
+
+      const allUpdated = await db
+        .select()
+        .from(schema.envVars)
+        .where(eq(schema.envVars.serviceId, service.id));
+
+      return {
+        detected: extracted.length,
+        added: addedCount,
+        skipped: skippedCount,
+        variables: allUpdated,
+      };
+    },
+    {
+      requireRole: "developer",
+      body: t.Optional(
+        t.Object({
+          composeContent: t.Optional(t.String()),
+        })
+      ),
     }
   );

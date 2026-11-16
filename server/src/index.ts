@@ -7,6 +7,8 @@ import { projectRoutes } from "./routes/projects.js";
 import { serviceRoutes } from "./routes/services.js";
 import { deployRoutes } from "./routes/deploy.js";
 import { proxyRoutes } from "./routes/proxy.js";
+import { logsRoutes } from "./routes/logs.js";
+import { terminalRoutes } from "./routes/terminal.js";
 import { dockerService } from "./services/docker.js";
 import { caddyService } from "./services/caddy.js";
 import path from "path";
@@ -45,7 +47,9 @@ const app = new Elysia()
   .use(projectRoutes)
   .use(serviceRoutes)
   .use(deployRoutes)
-  .use(proxyRoutes);
+  .use(proxyRoutes)
+  .use(logsRoutes)
+  .use(terminalRoutes);
 
 // Static file serving for Svelte SPA
 if (fs.existsSync(webDistPath)) {

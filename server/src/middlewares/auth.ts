@@ -10,12 +10,15 @@ export const authMiddleware = new Elysia({ name: "auth-plugin" })
       secret: config.jwtSecret,
     })
   )
-  .derive({ as: "scoped" }, async ({ headers, jwt, set }) => {
+  .derive({ as: "scoped" }, async ({ headers, query, jwt }) => {
     const authHeader = headers["authorization"];
-    if (!authHeader?.startsWith("Bearer ")) {
+    const token = authHeader?.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : (query as Record<string, string | undefined>)?.token;
+
+    if (!token) {
       return { user: null };
     }
-    const token = authHeader.slice(7);
     const payload = await jwt.verify(token);
     if (!payload || typeof payload !== "object") {
       return { user: null };

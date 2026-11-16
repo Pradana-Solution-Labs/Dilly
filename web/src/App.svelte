@@ -3,8 +3,11 @@
   import { 
     Layers, Server, Box, Globe, Play, Square, RotateCw, 
     Trash2, Plus, Terminal, Key, Shield, User, LogOut, CheckCircle2, 
-    AlertCircle, RefreshCw, ExternalLink 
+    AlertCircle, RefreshCw, ExternalLink, FileCode, Activity 
   } from 'lucide-svelte';
+  import ComposeEditor from './components/ComposeEditor.svelte';
+  import LiveLogs from './components/LiveLogs.svelte';
+  import TerminalView from './components/Terminal.svelte';
 
   // State
   let token = localStorage.getItem('dilly_token') || '';
@@ -22,7 +25,7 @@
   let projects: any[] = [];
   let selectedProject: any = null;
   let selectedService: any = null;
-  let serviceTab: 'overview' | 'env' | 'deployments' = 'overview';
+  let serviceTab: 'overview' | 'config' | 'env' | 'logs' | 'terminal' | 'deployments' = 'overview';
 
   let newProjectName = '';
   let newProjectDesc = '';
@@ -32,6 +35,7 @@
   let newServiceType: 'dockerfile' | 'compose' = 'compose';
   let newServiceDomain = '';
   let newServicePort = 80;
+  let newServiceCompose = '';
   let showNewServiceModal = false;
 
   let envVarsList: Array<{ key: string; value: string; isSecret: boolean }> = [];
@@ -152,14 +156,35 @@
           type: newServiceType,
           domain: newServiceDomain || undefined,
           internalPort: Number(newServicePort) || 80,
+          composeContent: newServiceType === 'compose' && newServiceCompose.trim() ? newServiceCompose : undefined,
         }),
       });
       newServiceName = '';
       newServiceDomain = '';
+      newServiceCompose = '';
       showNewServiceModal = false;
       await selectProject(selectedProject);
     } catch (err: any) {
       alert(err.message);
+    }
+  }
+
+  async function handleSaveCompose(newContent: string) {
+    if (!selectedService) return;
+    const updated = await api(`/api/services/${selectedService.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ composeContent: newContent }),
+    });
+    selectedService = { ...selectedService, composeContent: updated.composeContent };
+  }
+
+  function handleEnvDetected(data: any) {
+    if (data.variables) {
+      envVarsList = data.variables.map((e: any) => ({
+        key: e.key,
+        value: e.value,
+        isSecret: e.isSecret,
+      }));
     }
   }
 
@@ -489,8 +514,17 @@
                       <button class="tab-sub {serviceTab === 'overview' ? 'active' : ''}" on:click={() => (serviceTab = 'overview')}>
                         Overview
                       </button>
+                      <button class="tab-sub {serviceTab === 'config' ? 'active' : ''}" on:click={() => (serviceTab = 'config')}>
+                        Compose / Config
+                      </button>
                       <button class="tab-sub {serviceTab === 'env' ? 'active' : ''}" on:click={() => (serviceTab = 'env')}>
                         Environment Variables
+                      </button>
+                      <button class="tab-sub {serviceTab === 'logs' ? 'active' : ''}" on:click={() => (serviceTab = 'logs')}>
+                        Live Logs
+                      </button>
+                      <button class="tab-sub {serviceTab === 'terminal' ? 'active' : ''}" on:click={() => (serviceTab = 'terminal')}>
+                        Terminal
                       </button>
                       <button class="tab-sub {serviceTab === 'deployments' ? 'active' : ''}" on:click={() => (serviceTab = 'deployments')}>
                         Deployments
@@ -517,6 +551,17 @@
                             <span>{selectedService.gitBranch || 'main'}</span>
                           </div>
                         </div>
+                      {:else if serviceTab === 'config'}
+                        <ComposeEditor
+                          service={selectedService}
+                          {token}
+                          onSave={handleSaveCompose}
+                          onEnvDetected={handleEnvDetected}
+                        />
+                      {:else if serviceTab === 'logs'}
+                        <LiveLogs service={selectedService} {token} />
+                      {:else if serviceTab === 'terminal'}
+                        <TerminalView service={selectedService} {token} />
                       {:else if serviceTab === 'env'}
                         <div class="env-section">
                           <div class="env-table">
@@ -681,6 +726,17 @@
           <label>Internal Port</label>
           <input type="number" bind:value={newServicePort} placeholder="80" />
         </div>
+        {#if newServiceType === 'compose'}
+          <div class="form-group">
+            <label>docker-compose.yml (Optional, auto-extracts env variables)</label>
+            <textarea
+              bind:value={newServiceCompose}
+              rows="4"
+              class="code-input"
+              placeholder="version: '3.8'&#10;services:&#10;  app:&#10;    image: my-app&#10;    environment:&#10;      - PORT=80"
+            ></textarea>
+          </div>
+        {/if}
         <div class="modal-actions">
           <button class="btn btn-secondary" on:click={() => (showNewServiceModal = false)}>Cancel</button>
           <button class="btn btn-primary" on:click={createService}>Add Service</button>
@@ -1176,5 +1232,18 @@
     background: #0f172a;
     border-radius: 6px;
     margin-top: 16px;
+  }
+
+  .code-input {
+    width: 100%;
+    background: #0d0e12;
+    color: #64ffda;
+    border: 1px solid #333;
+    border-radius: 4px;
+    padding: 8px;
+    font-family: monospace;
+    font-size: 0.8rem;
+    resize: vertical;
+    box-sizing: border-box;
   }
 </style>

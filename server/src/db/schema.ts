@@ -30,6 +30,8 @@ export const services = pgTable("services", {
   gitBranch: text("git_branch").default("main"),
   dockerfilePath: text("dockerfile_path").default("Dockerfile"),
   composePath: text("compose_path").default("docker-compose.yml"),
+  composeContent: text("compose_content"),
+  dockerfileContent: text("dockerfile_content"),
   domain: text("domain"),
   internalPort: integer("internal_port").default(80),
   status: serviceStatusEnum("status").notNull().default("stopped"),

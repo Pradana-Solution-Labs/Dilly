@@ -62,6 +62,11 @@ export const deployRoutes = new Elysia({ prefix: "/api/services" })
             const composeDir = path.resolve(config.dataDir, project.name, service.name);
             const composeProjectName = `${project.name}_${service.name}`.toLowerCase().replace(/[^a-z0-9_-]/g, "");
 
+            if (service.composeContent) {
+              await composeService.writeComposeFile(composeDir, service.composeContent, service.composePath || "docker-compose.yml");
+              appendLog(`[${new Date().toISOString()}] Synced in-place docker-compose.yml to workspace.\n`);
+            }
+
             const result = await composeService.up(composeDir, composeProjectName, envMap, (chunk) => {
               appendLog(chunk);
             });
