@@ -16,6 +16,23 @@ import fs from "fs";
 
 const webDistPath = path.resolve(import.meta.dir, "../../web/dist");
 
+const staticPlugin = new Elysia();
+if (fs.existsSync(webDistPath)) {
+  staticPlugin
+    .get("/assets/*", ({ path: reqPath }) => {
+      const filePath = path.join(webDistPath, reqPath);
+      return Bun.file(filePath);
+    })
+    .get("/favicon.svg", () => Bun.file(path.join(webDistPath, "favicon.svg")))
+    .get("/icons.svg", () => Bun.file(path.join(webDistPath, "icons.svg")))
+    .get("/", () => Bun.file(path.join(webDistPath, "index.html")))
+    .get("/login", () => Bun.file(path.join(webDistPath, "index.html")))
+    .get("/dashboard", () => Bun.file(path.join(webDistPath, "index.html")))
+    .get("/projects/*", () => Bun.file(path.join(webDistPath, "index.html")))
+    .get("/services/*", () => Bun.file(path.join(webDistPath, "index.html")))
+    .get("/settings", () => Bun.file(path.join(webDistPath, "index.html")));
+}
+
 const app = new Elysia()
   .use(cors())
   .use(
@@ -49,28 +66,8 @@ const app = new Elysia()
   .use(deployRoutes)
   .use(proxyRoutes)
   .use(logsRoutes)
-  .use(terminalRoutes);
-
-// Static file serving for Svelte SPA
-if (fs.existsSync(webDistPath)) {
-  // Static assets directly from /assets/
-  app.get("/assets/*", ({ path: reqPath }) => {
-    const filePath = path.join(webDistPath, reqPath);
-    return Bun.file(filePath);
-  });
-
-  // Favicon & root SVG assets
-  app.get("/favicon.svg", () => Bun.file(path.join(webDistPath, "favicon.svg")));
-  app.get("/icons.svg", () => Bun.file(path.join(webDistPath, "icons.svg")));
-
-  // Client-side routes fallback to index.html
-  app.get("/", () => Bun.file(path.join(webDistPath, "index.html")));
-  app.get("/login", () => Bun.file(path.join(webDistPath, "index.html")));
-  app.get("/dashboard", () => Bun.file(path.join(webDistPath, "index.html")));
-  app.get("/projects/*", () => Bun.file(path.join(webDistPath, "index.html")));
-  app.get("/services/*", () => Bun.file(path.join(webDistPath, "index.html")));
-  app.get("/settings", () => Bun.file(path.join(webDistPath, "index.html")));
-}
+  .use(terminalRoutes)
+  .use(staticPlugin);
 
 // Startup initialization
 async function bootstrap() {
