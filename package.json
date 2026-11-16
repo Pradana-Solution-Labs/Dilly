@@ -1,0 +1,17 @@
+{
+  "name": "dilly",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev:server": "bun --filter server dev",
+    "dev:web": "bun --filter web dev",
+    "dev": "bun --filter server dev",
+    "build": "bun --filter server build && bun --filter web build",
+    "db:generate": "bun --filter server db:generate",
+    "db:migrate": "bun --filter server db:migrate"
+  }
+}

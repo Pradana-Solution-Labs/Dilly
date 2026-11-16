@@ -1,0 +1,39 @@
+services:
+  dilly-db:
+    image: postgres:16-alpine
+    container_name: dilly-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: dilly
+    ports:
+      - "5432:5432"
+    volumes:
+      - dilly_pg_data:/var/lib/postgresql/data
+    networks:
+      - dilly-net
+
+  dilly-caddy:
+    image: caddy:2-alpine
+    container_name: dilly-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "2019:2019"
+    volumes:
+      - dilly_caddy_data:/data
+      - dilly_caddy_config:/config
+    networks:
+      - dilly-net
+
+networks:
+  dilly-net:
+    name: dilly-net
+    driver: bridge
+
+volumes:
+  dilly_pg_data:
+  dilly_caddy_data:
+  dilly_caddy_config:
