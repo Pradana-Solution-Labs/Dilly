@@ -36,6 +36,10 @@ export const services = pgTable("services", {
   internalPort: integer("internal_port").default(80),
   status: serviceStatusEnum("status").notNull().default("stopped"),
   currentContainerId: text("current_container_id"),
+  webhookSecret: text("webhook_secret"),
+  webhookEnabled: boolean("webhook_enabled").notNull().default(true),
+  sshPublicKey: text("ssh_public_key"),
+  sshPrivateKey: text("ssh_private_key"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -54,6 +58,7 @@ export const deployments = pgTable("deployments", {
   serviceId: uuid("service_id").references(() => services.id, { onDelete: "cascade" }).notNull(),
   commitHash: text("commit_hash"),
   commitMessage: text("commit_message"),
+  triggeredBy: text("triggered_by").notNull().default("manual"),
   status: deployStatusEnum("status").notNull().default("queued"),
   logs: text("logs").default(""),
   startedAt: timestamp("started_at").defaultNow().notNull(),

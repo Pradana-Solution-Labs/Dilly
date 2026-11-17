@@ -9,6 +9,7 @@ import { deployRoutes } from "./routes/deploy.js";
 import { proxyRoutes } from "./routes/proxy.js";
 import { logsRoutes } from "./routes/logs.js";
 import { terminalRoutes } from "./routes/terminal.js";
+import { webhookRoutes } from "./routes/webhooks.js";
 import { dockerService } from "./services/docker.js";
 import { caddyService } from "./services/caddy.js";
 import path from "path";
@@ -67,6 +68,7 @@ const app = new Elysia()
   .use(proxyRoutes)
   .use(logsRoutes)
   .use(terminalRoutes)
+  .use(webhookRoutes)
   .use(staticPlugin);
 
 // Startup initialization

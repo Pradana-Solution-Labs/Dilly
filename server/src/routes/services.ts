@@ -5,6 +5,9 @@ import { eq, and } from "drizzle-orm";
 import { dockerService } from "../services/docker.js";
 import { caddyService } from "../services/caddy.js";
 import { extractComposeEnvVars } from "../services/env-parser.js";
+import { gitService } from "../services/git.js";
+import { runDeployment } from "./deploy.js";
+import crypto from "crypto";
 
 export const serviceRoutes = new Elysia({ prefix: "/api/services" })
   .use(authMiddleware)
@@ -36,6 +39,8 @@ export const serviceRoutes = new Elysia({ prefix: "/api/services" })
           dockerfileContent: body.dockerfileContent,
           domain: body.domain,
           internalPort: body.internalPort || 80,
+          webhookSecret: crypto.randomBytes(24).toString("hex"),
+          webhookEnabled: true,
         })
         .returning();
 
@@ -67,6 +72,7 @@ export const serviceRoutes = new Elysia({ prefix: "/api/services" })
         dockerfileContent: t.Optional(t.String()),
         domain: t.Optional(t.String()),
         internalPort: t.Optional(t.Number()),
+        webhookEnabled: t.Optional(t.Boolean()),
       }),
     }
   )
@@ -100,8 +106,22 @@ export const serviceRoutes = new Elysia({ prefix: "/api/services" })
         value: env.isSecret && user.role === "viewer" ? "••••••••" : env.value,
       }));
 
+      // Ensure webhookSecret exists for existing legacy services
+      let activeWebhookSecret = service.webhookSecret;
+      if (!activeWebhookSecret) {
+        activeWebhookSecret = crypto.randomBytes(24).toString("hex");
+        await db
+          .update(schema.services)
+          .set({ webhookSecret: activeWebhookSecret })
+          .where(eq(schema.services.id, service.id));
+      }
+
+      const { sshPrivateKey, ...safeService } = service;
+
       return {
-        ...service,
+        ...safeService,
+        webhookSecret: activeWebhookSecret,
+        hasDeployKey: Boolean(sshPrivateKey),
         envVars: safeEnv,
       };
     },
@@ -156,6 +176,7 @@ export const serviceRoutes = new Elysia({ prefix: "/api/services" })
         dockerfileContent: t.Optional(t.String()),
         domain: t.Optional(t.String()),
         internalPort: t.Optional(t.Number()),
+        webhookEnabled: t.Optional(t.Boolean()),
       }),
     }
   )
@@ -397,5 +418,262 @@ export const serviceRoutes = new Elysia({ prefix: "/api/services" })
           composeContent: t.Optional(t.String()),
         })
       ),
+    }
+  )
+  // Deploy Keys Management
+  .get(
+    "/:id/deploy-key",
+    async ({ params, user, set }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: "Unauthorized" };
+      }
+
+      const [service] = await db.select().from(schema.services).where(eq(schema.services.id, params.id));
+      if (!service) {
+        set.status = 404;
+        return { error: "Service not found" };
+      }
+
+      return {
+        hasKey: Boolean(service.sshPrivateKey),
+        publicKey: service.sshPublicKey || null,
+      };
+    },
+    {
+      requireRole: "viewer",
+    }
+  )
+  .post(
+    "/:id/deploy-key/generate",
+    async ({ params, user, set }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: "Unauthorized" };
+      }
+
+      const [service] = await db.select().from(schema.services).where(eq(schema.services.id, params.id));
+      if (!service) {
+        set.status = 404;
+        return { error: "Service not found" };
+      }
+
+      const keypair = await gitService.generateDeployKey(`dilly-${service.name}@dilly.dev`);
+
+      await db
+        .update(schema.services)
+        .set({
+          sshPublicKey: keypair.publicKey,
+          sshPrivateKey: keypair.privateKey,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.services.id, service.id));
+
+      return {
+        success: true,
+        publicKey: keypair.publicKey,
+      };
+    },
+    {
+      requireRole: "admin",
+    }
+  )
+  .post(
+    "/:id/deploy-key/custom",
+    async ({ params, body, user, set }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: "Unauthorized" };
+      }
+
+      const [service] = await db.select().from(schema.services).where(eq(schema.services.id, params.id));
+      if (!service) {
+        set.status = 404;
+        return { error: "Service not found" };
+      }
+
+      await db
+        .update(schema.services)
+        .set({
+          sshPublicKey: body.publicKey || "custom-ssh-key",
+          sshPrivateKey: body.privateKey,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.services.id, service.id));
+
+      return {
+        success: true,
+        publicKey: body.publicKey || "custom-ssh-key",
+      };
+    },
+    {
+      requireRole: "admin",
+      body: t.Object({
+        privateKey: t.String(),
+        publicKey: t.Optional(t.String()),
+      }),
+    }
+  )
+  .delete(
+    "/:id/deploy-key",
+    async ({ params, user, set }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: "Unauthorized" };
+      }
+
+      const [service] = await db.select().from(schema.services).where(eq(schema.services.id, params.id));
+      if (!service) {
+        set.status = 404;
+        return { error: "Service not found" };
+      }
+
+      await db
+        .update(schema.services)
+        .set({
+          sshPublicKey: null,
+          sshPrivateKey: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.services.id, service.id));
+
+      return { success: true };
+    },
+    {
+      requireRole: "admin",
+    }
+  )
+  // Webhook Management
+  .get(
+    "/:id/webhook",
+    async ({ params, user, set, request }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: "Unauthorized" };
+      }
+
+      const [service] = await db.select().from(schema.services).where(eq(schema.services.id, params.id));
+      if (!service) {
+        set.status = 404;
+        return { error: "Service not found" };
+      }
+
+      let secret = service.webhookSecret;
+      if (!secret) {
+        secret = crypto.randomBytes(24).toString("hex");
+        await db
+          .update(schema.services)
+          .set({ webhookSecret: secret })
+          .where(eq(schema.services.id, service.id));
+      }
+
+      const host = request.headers.get("host") || "localhost:3333";
+      const protocol = request.headers.get("x-forwarded-proto") || (host.includes("localhost") ? "http" : "https");
+      const webhookUrl = `${protocol}://${host}/api/webhooks/deploy/${service.id}`;
+
+      return {
+        webhookUrl,
+        webhookSecret: secret,
+        webhookEnabled: service.webhookEnabled,
+      };
+    },
+    {
+      requireRole: "viewer",
+    }
+  )
+  .post(
+    "/:id/webhook/regenerate-secret",
+    async ({ params, user, set }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: "Unauthorized" };
+      }
+
+      const [service] = await db.select().from(schema.services).where(eq(schema.services.id, params.id));
+      if (!service) {
+        set.status = 404;
+        return { error: "Service not found" };
+      }
+
+      const newSecret = crypto.randomBytes(24).toString("hex");
+      await db
+        .update(schema.services)
+        .set({ webhookSecret: newSecret, updatedAt: new Date() })
+        .where(eq(schema.services.id, service.id));
+
+      return {
+        success: true,
+        webhookSecret: newSecret,
+      };
+    },
+    {
+      requireRole: "admin",
+    }
+  )
+  .patch(
+    "/:id/webhook",
+    async ({ params, body, user, set }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: "Unauthorized" };
+      }
+
+      const [service] = await db.select().from(schema.services).where(eq(schema.services.id, params.id));
+      if (!service) {
+        set.status = 404;
+        return { error: "Service not found" };
+      }
+
+      await db
+        .update(schema.services)
+        .set({ webhookEnabled: body.enabled, updatedAt: new Date() })
+        .where(eq(schema.services.id, service.id));
+
+      return {
+        success: true,
+        webhookEnabled: body.enabled,
+      };
+    },
+    {
+      requireRole: "admin",
+      body: t.Object({
+        enabled: t.Boolean(),
+      }),
+    }
+  )
+  .post(
+    "/:id/webhook/test",
+    async ({ params, user, set }) => {
+      if (!user) {
+        set.status = 401;
+        return { error: "Unauthorized" };
+      }
+
+      const [service] = await db.select().from(schema.services).where(eq(schema.services.id, params.id));
+      if (!service) {
+        set.status = 404;
+        return { error: "Service not found" };
+      }
+
+      try {
+        const result = await runDeployment(service.id, {
+          triggeredBy: "webhook",
+          commitHash: "test-" + crypto.randomBytes(4).toString("hex"),
+          commitMessage: `Test webhook simulation triggered by ${user.name}`,
+          user: { name: user.name, role: user.role },
+        });
+
+        return {
+          success: true,
+          message: "Simulated webhook push deployment triggered",
+          deploymentId: result.deploymentId,
+        };
+      } catch (err: any) {
+        set.status = 500;
+        return { error: err.message };
+      }
+    },
+    {
+      requireRole: "developer",
     }
   );

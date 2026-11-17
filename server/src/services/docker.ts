@@ -1,4 +1,5 @@
 import Docker from "dockerode";
+import { spawn } from "child_process";
 import { config } from "../config.js";
 
 class DockerManager {
@@ -256,6 +257,53 @@ class DockerManager {
         } catch {}
       },
     };
+  }
+
+  /**
+   * Builds a Docker image using `docker build` streaming real-time output
+   */
+  async buildImage(
+    contextDir: string,
+    dockerfilePath: string = "Dockerfile",
+    tag: string,
+    onLog?: (chunk: string) => void
+  ): Promise<{ success: boolean; exitCode: number | null }> {
+    return new Promise((resolve) => {
+      const child = spawn("docker", ["build", "-t", tag, "-f", dockerfilePath, "."], {
+        cwd: contextDir,
+        env: {
+          ...process.env,
+          ...(config.dockerHost ? { DOCKER_HOST: config.dockerHost } : {}),
+        },
+        shell: true,
+      });
+
+      child.stdout.on("data", (data) => {
+        const text = data.toString();
+        if (onLog) onLog(text);
+      });
+
+      child.stderr.on("data", (data) => {
+        const text = data.toString();
+        if (onLog) onLog(text);
+      });
+
+      child.on("close", (code) => {
+        resolve({
+          success: code === 0,
+          exitCode: code,
+        });
+      });
+
+      child.on("error", (err) => {
+        const text = `Failed to spawn docker build: ${err.message}\n`;
+        if (onLog) onLog(text);
+        resolve({
+          success: false,
+          exitCode: -1,
+        });
+      });
+    });
   }
 }
 

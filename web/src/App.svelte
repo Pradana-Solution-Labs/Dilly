@@ -3,11 +3,12 @@
   import { 
     Layers, Server, Box, Globe, Play, Square, RotateCw, 
     Trash2, Plus, Terminal, Key, Shield, User, LogOut, CheckCircle2, 
-    AlertCircle, RefreshCw, ExternalLink, FileCode, Activity 
+    AlertCircle, RefreshCw, ExternalLink, FileCode, Activity, GitBranch, Webhook 
   } from 'lucide-svelte';
   import ComposeEditor from './components/ComposeEditor.svelte';
   import LiveLogs from './components/LiveLogs.svelte';
   import TerminalView from './components/Terminal.svelte';
+  import GitWebhookSettings from './components/GitWebhookSettings.svelte';
 
   // State
   let token = localStorage.getItem('dilly_token') || '';
@@ -25,7 +26,7 @@
   let projects: any[] = [];
   let selectedProject: any = null;
   let selectedService: any = null;
-  let serviceTab: 'overview' | 'config' | 'env' | 'logs' | 'terminal' | 'deployments' = 'overview';
+  let serviceTab: 'overview' | 'config' | 'git' | 'env' | 'logs' | 'terminal' | 'deployments' = 'overview';
 
   let newProjectName = '';
   let newProjectDesc = '';
@@ -517,6 +518,9 @@
                       <button class="tab-sub {serviceTab === 'config' ? 'active' : ''}" on:click={() => (serviceTab = 'config')}>
                         Compose / Config
                       </button>
+                      <button class="tab-sub {serviceTab === 'git' ? 'active' : ''}" on:click={() => (serviceTab = 'git')}>
+                        Git & Webhooks
+                      </button>
                       <button class="tab-sub {serviceTab === 'env' ? 'active' : ''}" on:click={() => (serviceTab = 'env')}>
                         Environment Variables
                       </button>
@@ -558,6 +562,12 @@
                           onSave={handleSaveCompose}
                           onEnvDetected={handleEnvDetected}
                         />
+                      {:else if serviceTab === 'git'}
+                        <GitWebhookSettings
+                          service={selectedService}
+                          {token}
+                          onUpdate={() => selectService(selectedService)}
+                        />
                       {:else if serviceTab === 'logs'}
                         <LiveLogs service={selectedService} {token} />
                       {:else if serviceTab === 'terminal'}
@@ -591,11 +601,25 @@
                         </div>
                       {:else if serviceTab === 'deployments'}
                         <div class="deploy-history">
+                          {#if deploymentsList.length === 0}
+                            <div class="empty-deployments">
+                              <p>No deployments recorded yet for this service.</p>
+                            </div>
+                          {/if}
                           {#each deploymentsList as d}
                             <div class="deploy-row">
                               <div class="d-meta">
                                 <span class="status-indicator {d.status}">{d.status}</span>
-                                <span>{new Date(d.startedAt).toLocaleString()}</span>
+                                <span class="trigger-badge {d.triggeredBy || 'manual'}">{d.triggeredBy || 'manual'}</span>
+                                {#if d.commitHash}
+                                  <span class="commit-pill" title={d.commitMessage || ''}>
+                                    <code>{d.commitHash.substring(0, 7)}</code>
+                                    {#if d.commitMessage}
+                                      <span class="commit-msg">{d.commitMessage.split('\n')[0]}</span>
+                                    {/if}
+                                  </span>
+                                {/if}
+                                <span class="deploy-time">{new Date(d.startedAt).toLocaleString()}</span>
                               </div>
                               <button class="btn btn-sm btn-secondary" on:click={() => viewLogs(d.logs)}>
                                 <Terminal size={14} /> View Logs
@@ -1117,8 +1141,69 @@
 
   .d-meta {
     display: flex;
-    gap: 16px;
+    gap: 12px;
     align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .trigger-badge {
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .trigger-badge.manual {
+    background: rgba(100, 255, 218, 0.15);
+    border: 1px solid #64ffda;
+    color: #64ffda;
+  }
+
+  .trigger-badge.webhook {
+    background: rgba(255, 121, 198, 0.15);
+    border: 1px solid #ff79c6;
+    color: #ff79c6;
+  }
+
+  .commit-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: #181920;
+    border: 1px solid #282a36;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.78rem;
+  }
+
+  .commit-pill code {
+    color: #f1fa8c;
+    font-family: monospace;
+    font-weight: bold;
+  }
+
+  .commit-msg {
+    color: #bbb;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .deploy-time {
+    font-size: 0.8rem;
+    color: #888;
+  }
+
+  .empty-deployments {
+    padding: 1.5rem;
+    text-align: center;
+    color: #888;
+    background: #0d0e12;
+    border-radius: 6px;
+    border: 1px dashed #282a36;
   }
 
   .btn {
