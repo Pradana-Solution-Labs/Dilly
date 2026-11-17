@@ -1,5 +1,5 @@
 import postgres from "postgres";
-import { config } from "../config.js";
+import { config } from "../src/config.js";
 
 async function run() {
   const sql = postgres(config.databaseUrl);
