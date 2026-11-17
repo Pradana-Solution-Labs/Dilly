@@ -1,4 +1,4 @@
-import { gitService } from "./src/services/git.js";
+import { gitService } from "../src/services/git.js";
 
 async function test() {
   console.log("Testing GitService...");

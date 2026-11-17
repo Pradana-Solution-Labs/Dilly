@@ -1,7 +1,7 @@
 import crypto from "crypto";
 
 async function run() {
-  const baseUrl = "http://127.0.0.1:3333";
+  const baseUrl = process.env.API_URL || "http://127.0.0.1:3333";
   console.log("Testing Dilly API at", baseUrl);
 
   // 1. Health check
@@ -10,7 +10,15 @@ async function run() {
   console.log("Health:", health);
   if (health.status !== "healthy") throw new Error("Health check failed");
 
-  // 2. Login
+  // 2. Register (if not exists) and Login
+  try {
+    await fetch(`${baseUrl}/api/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "admin@dilly.dev", password: "password123", name: "Master Admin" }),
+    });
+  } catch {}
+
   const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -24,13 +32,39 @@ async function run() {
   const projectsRes = await fetch(`${baseUrl}/api/projects`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  const projects = await projectsRes.json();
-  const firstProject = projects[0];
-  const fullProjectRes = await fetch(`${baseUrl}/api/projects/${firstProject.id}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const fullProject = await fullProjectRes.json();
-  const service = fullProject.services[0];
+  let projects = await projectsRes.json();
+  let service: any;
+
+  if (!projects || projects.length === 0) {
+    const createP = await fetch(`${baseUrl}/api/projects`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "default-project" }),
+    });
+    const p = await createP.json();
+    const createS = await fetch(`${baseUrl}/api/services/project/${p.id}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "demo-service", type: "compose" }),
+    });
+    service = await createS.json();
+  } else {
+    const firstProject = projects[0];
+    const fullProjectRes = await fetch(`${baseUrl}/api/projects/${firstProject.id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const fullProject = await fullProjectRes.json();
+    if (!fullProject.services || fullProject.services.length === 0) {
+      const createS = await fetch(`${baseUrl}/api/services/project/${firstProject.id}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "demo-service", type: "compose" }),
+      });
+      service = await createS.json();
+    } else {
+      service = fullProject.services[0];
+    }
+  }
   console.log("Target Service:", service.name, `(${service.id})`);
 
   // 4. Test Deploy Key generation
